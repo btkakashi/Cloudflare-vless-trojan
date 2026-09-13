@@ -3,8 +3,6 @@
 
 这是基于 [yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan) 的增强 Fork。仓库完整保留了上游脚本，同时在 `src/` 中新增了一个可读、可测试、可回退的 Cloudflare Workers VLESS 实现。
 
-> 当前自用部署：`btkakashi.cc.cd` 已绑定到 `cloudflare-vless-trojan-hardened-staging`。访问订阅必须使用部署时设置的私有 UUID；仓库和日志中不保存 UUID。
-
 ## 本 Fork 的主要增强
 
 - VLESS + WebSocket + TLS，订阅只生成 443、2083、2087、2096 四个 TLS 节点。
