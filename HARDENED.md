@@ -1,6 +1,16 @@
-# Hardened Worker（可回退版本）
+# Hardened Worker（已部署，可回退）
 
 这是在上游脚本之外新增的可读、可测试版本。原来的 `Vless_workers_pages/_worker.js` 与 `_worker明.js` 均保留，因此可以随时回退。
+
+## 当前部署状态
+
+- Worker：`cloudflare-vless-trojan-hardened-staging`
+- 自定义域名：`btkakashi.cc.cd`
+- ProxyIP 动态池：Cloudflare KV，保留 6 个候选
+- 自动刷新：Cloudflare Cron，`17 */6 * * *`（UTC）
+- 旧 Worker：`nameless-disk-b0ed` 暂时保留，但不再承载该自定义域名
+
+UUID 仅保存在 Worker Secret 中，不在本文档、仓库或日志中公开。
 
 ## 已解决的问题
 
@@ -20,7 +30,7 @@
 2. 先部署为独立测试 Worker：`npm run deploy:staging`。默认名称是 `cloudflare-vless-trojan-hardened-staging`，不会覆盖现有 Worker。
 3. 设置独立测试 UUID Secret：`npx wrangler secret put uuid --env staging`。
 4. 在 staging 的 `wrangler.jsonc` 中设置静态 `proxyip` 兜底和专用 `PROXY_POOL` KV 绑定。
-5. 先用临时 workers.dev 域名验证订阅和代理，再把自定义域切换到新 Worker。
+5. 先用临时 workers.dev 域名验证订阅和代理，再把自定义域切换到新 Worker。自行 Fork 时必须把 `env.staging.routes` 改成自己的域名，或在测试阶段删除该项。
 
 ## 变量
 
@@ -44,4 +54,4 @@
 
 ## 回退
 
-新版本以独立 Worker 验证，不覆盖旧 Worker。切换自定义域前记录旧 Worker 名称；如出现问题，把自定义域重新绑定旧 Worker 即可。仓库中原始上游脚本也未修改。
+当前自定义域名已指向 Hardened Worker，旧 Worker `nameless-disk-b0ed` 仍保留。如出现问题，把自定义域重新绑定旧 Worker 即可；仓库中的上游原始脚本也未修改。

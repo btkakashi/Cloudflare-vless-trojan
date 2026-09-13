@@ -1,4 +1,71 @@
 
+# Cloudflare VLESS/Trojan Hardened
+
+这是基于 [yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan) 的增强 Fork。仓库完整保留了上游脚本，同时在 `src/` 中新增了一个可读、可测试、可回退的 Cloudflare Workers VLESS 实现。
+
+> 当前自用部署：`btkakashi.cc.cd` 已绑定到 `cloudflare-vless-trojan-hardened-staging`。访问订阅必须使用部署时设置的私有 UUID；仓库和日志中不保存 UUID。
+
+## 本 Fork 的主要增强
+
+- VLESS + WebSocket + TLS，订阅只生成 443、2083、2087、2096 四个 TLS 节点。
+- UUID 通过 Cloudflare Worker Secret 保存，不再硬编码到源码或配置文件。
+- WebSocket 后续帧兼容 ArrayBuffer、TypedArray 和 Blob，避免 TLS 握手后出现空数据帧。
+- 直连失败或首字节超时时，自动切换到 ProxyIP 池。
+- ProxyIP 按批次并发拨号并进行首字节竞速；TLS 请求还会校验返回记录，落选连接立即关闭。
+- Cloudflare Cron 每 6 小时解析 HK/JP 发现源，进行并发 TCP 预筛，并把 6 个区域交替候选写入 KV。
+- 动态池不可用、过期或刷新失败时，继续使用上一次有效池或静态 HK/JP 候选。
+- `/pyip=` 默认关闭；即使手动开启，也只能使用配置白名单中的 ProxyIP。
+- 配置页面不加载第三方脚本或样式，未知 HTTP 路径返回 404。
+
+运行链路：
+
+```text
+客户端 → Cloudflare 自定义域/优选入口 → Hardened Worker
+                                      ├─ 目标直连
+                                      └─ 超时/失败 → 动态 KV 池并发竞速 → 静态候选兜底
+
+Cron（每 6 小时）→ DNS 发现 → TCP 预筛 → 6 个候选 → Cloudflare KV
+```
+
+## 订阅地址格式
+
+把 `你的域名` 和 `你的UUID` 替换为自己的部署值：
+
+| 用途 | 地址 |
+| --- | --- |
+| 配置首页 | `https://你的域名/你的UUID` |
+| 通用 VLESS 订阅 | `https://你的域名/你的UUID/pty` |
+| Clash Meta / Mihomo | `https://你的域名/你的UUID/pcl` |
+| Sing-box | `https://你的域名/你的UUID/psb` |
+
+客户端无需感知 ProxyIP 的更新或故障切换，订阅地址保持不变。
+
+## 部署与验证
+
+本仓库的 `wrangler.jsonc` 是当前自用环境配置，包含专用 KV ID 和自定义域名。自行 Fork 部署时，请先创建自己的 KV Namespace，并替换或删除 `env.staging.routes` 与 `env.staging.kv_namespaces` 中的现有值。
+
+```bash
+npm install
+npm run check
+npm test
+npx wrangler secret put uuid --env staging
+npm run deploy:staging
+```
+
+部署后应先通过 `workers.dev` 地址验证订阅和真实代理流量，再绑定自定义域名。当前版本具有 16 项自动化测试，并已实际验证 Google、YouTube、Netflix 访问以及单个 ProxyIP 失效时的自动切换。
+
+完整变量、部署步骤与回退说明见 [HARDENED.md](./HARDENED.md)。
+
+## 与上游脚本的关系
+
+- `src/`、`test/`、`wrangler.jsonc`：本 Fork 新增的 Hardened Worker。
+- `Vless_workers_pages/`、`Trojan_workers_pages/`、`s5http_wkpgs/` 等：保留的上游原始方案。
+- 新 Worker 独立部署，不覆盖上游脚本；旧 Worker 也可保留用于快速回退。
+
+---
+
+## 上游项目原始说明
+
 <img width="766" height="181" alt="9edae247c703bef887a2d680c77c3c17" src="https://github.com/user-attachments/assets/a641b36d-59ba-41e4-ac6f-6622f786187e" />
 
 # 搭建方式1：Cloudflare-Socks5/Http本地代理脚本
