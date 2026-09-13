@@ -1,9 +1,10 @@
 import { connect } from "cloudflare:sockets";
 import { buildRuntimeConfig, selectPathProxyEndpoints, type ProxyEndpoint, type RuntimeConfig, type RuntimeEnv } from "./config";
+import { loadProxyPool, mergeProxyEndpoints, refreshProxyPool, type ProxyPoolEnv } from "./proxy-pool";
 import { renderSubscriptionResponse } from "./subscriptions";
 
 type TcpSocket = ReturnType<typeof connect>;
-type WorkerEnv = Env & RuntimeEnv;
+type WorkerEnv = Env & RuntimeEnv & ProxyPoolEnv;
 
 interface ParsedVlessRequest {
   address: string;
@@ -59,6 +60,8 @@ export default {
       return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } });
     }
 
+    const dynamicProxyEndpoints = await loadProxyPool(env);
+    config = { ...config, proxyEndpoints: mergeProxyEndpoints(dynamicProxyEndpoints, config.proxyEndpoints) };
     const logger = createLogger(requestId, config.debug);
     try {
       const pathProxyEndpoints = selectPathProxyEndpoints(url.pathname, config);
@@ -67,6 +70,11 @@ export default {
       logger.error("websocket_request_rejected", error);
       return new Response("Bad request", { status: 400 });
     }
+  },
+  async scheduled(_controller, env, ctx): Promise<void> {
+    ctx.waitUntil(refreshProxyPool(env).catch((error) => {
+      console.error(JSON.stringify({ event: "proxy_pool_refresh_failed", error: errorMessage(error) }));
+    }));
   },
 } satisfies ExportedHandler<WorkerEnv>;
 

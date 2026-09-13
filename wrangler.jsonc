@@ -23,13 +23,28 @@
     "staging": {
       "workers_dev": true,
       "preview_urls": true,
+      "triggers": {
+        "crons": ["17 */6 * * *"]
+      },
+      "kv_namespaces": [
+        {
+          "binding": "PROXY_POOL",
+          "id": "16df6b9a71c94af786a514a1eb470046"
+        }
+      ],
       "vars": {
         "proxyip": "proxyip.hk.fxxk.dedyn.io,proxyip.jp.fxxk.dedyn.io",
         "PROXY_CONCURRENT_DIAL": "2",
         "CONNECT_TIMEOUT_MS": "1800",
         "FIRST_BYTE_TIMEOUT_MS": "3000",
         "ALLOW_PATH_PROXYIP": "false",
-        "DEBUG": "false"
+        "DEBUG": "false",
+        "PROXY_DISCOVERY_HOSTS": "proxyip.hk.fxxk.dedyn.io,proxyip.jp.fxxk.dedyn.io",
+        "PROXY_DISCOVERY_SAMPLE_SIZE": "24",
+        "PROXY_POOL_SIZE": "6",
+        "PROXY_PROBE_CONCURRENCY": "4",
+        "PROXY_PROBE_TIMEOUT_MS": "1500",
+        "PROXY_POOL_MAX_AGE_MS": "86400000"
       }
     }
   }
