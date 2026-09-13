@@ -26,6 +26,11 @@ interface PrimedSocket {
   endpoint: ProxyEndpoint;
 }
 
+interface FirstSocketChunk {
+  reader: ReadableStreamDefaultReader<Uint8Array>;
+  firstChunk: Uint8Array;
+}
+
 interface Logger {
   debug(message: string, details?: Record<string, unknown>): void;
   error(message: string, error?: unknown): void;
@@ -78,9 +83,9 @@ function handleWebSocket(
 
   const state: ConnectionState = { socket: null, connecting: null, dnsMode: false };
   const input = websocketReadable(server, request.headers.get("sec-websocket-protocol"));
-  const pipeline = input.pipeTo(new WritableStream<ArrayBuffer | Uint8Array>({
+  const pipeline = input.pipeTo(new WritableStream<unknown>({
     async write(chunk) {
-      const bytes = toUint8Array(chunk);
+      const bytes = await toUint8Array(chunk);
       if (state.dnsMode) {
         await forwardDnsPackets(bytes, server, null, logger);
         return;
@@ -149,15 +154,18 @@ async function forwardWithFallback(
   webSocket: WebSocket,
   logger: Logger,
 ): Promise<void> {
-  let header = parsed.responseHeader;
-  const directResult = await pumpSocket(directSocket, webSocket, header, logger);
-  if (directResult.receivedData || proxyEndpoints.length === 0 || webSocket.readyState !== WS_OPEN) return;
+  const directResult = await readFirstSocketChunk(directSocket, config.firstByteTimeoutMs, logger);
+  if (directResult) {
+    sendWebSocket(webSocket, directResult.firstChunk, parsed.responseHeader);
+    await pumpReader(directResult.reader, directSocket, webSocket, logger);
+    return;
+  }
 
-  header = directResult.headerSent ? new Uint8Array() : header;
+  if (proxyEndpoints.length === 0 || webSocket.readyState !== WS_OPEN) return;
   state.socket = null;
   logger.debug("direct_connection_no_data", { fallbackCandidates: proxyEndpoints.length });
 
-  await forwardProxyFallback(parsed, proxyEndpoints, config, state, webSocket, logger, header);
+  await forwardProxyFallback(parsed, proxyEndpoints, config, state, webSocket, logger, parsed.responseHeader);
 }
 
 async function forwardProxyFallback(
@@ -196,7 +204,10 @@ async function dialProxyRace(
 
   for (let offset = 0; offset < endpoints.length; offset += concurrency) {
     const batch = endpoints.slice(offset, offset + concurrency);
-    const attempts = batch.map((endpoint) => primeSocket(endpoint, firstPayload, config));
+    const attempts = batch.map((endpoint) => primeSocket(endpoint, firstPayload, config).catch((error) => {
+      logger.debug("proxy_candidate_failed", { endpoint: endpointLabel(endpoint), error: errorMessage(error) });
+      throw error;
+    }));
     let winner: PrimedSocket | null = null;
     try {
       winner = await Promise.any(attempts);
@@ -229,6 +240,9 @@ async function primeSocket(endpoint: ProxyEndpoint, payload: Uint8Array, config:
     reader = socket.readable.getReader();
     const result = await withTimeout(reader.read(), config.firstByteTimeoutMs, "ProxyIP first-byte timeout");
     if (result.done || !result.value?.byteLength) throw new Error("ProxyIP closed before sending data");
+    if (looksLikeTlsClientHello(payload) && !looksLikeTlsServerRecord(result.value)) {
+      throw new Error("ProxyIP returned a non-TLS response to a TLS connection");
+    }
     return { socket, reader, firstChunk: result.value, endpoint };
   } catch (error) {
     reader?.releaseLock();
@@ -248,26 +262,23 @@ async function openSocket(endpoint: ProxyEndpoint, timeoutMs: number): Promise<T
   }
 }
 
-async function pumpSocket(socket: TcpSocket, webSocket: WebSocket, responseHeader: Uint8Array, logger: Logger): Promise<{ receivedData: boolean; headerSent: boolean }> {
+async function readFirstSocketChunk(socket: TcpSocket, timeoutMs: number, logger: Logger): Promise<FirstSocketChunk | null> {
   const reader = socket.readable.getReader();
-  let receivedData = false;
-  let headerSent = false;
   try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (!value?.byteLength) continue;
-      receivedData = true;
-      sendWebSocket(webSocket, value, headerSent ? null : responseHeader);
-      headerSent = true;
-    }
+    const result = await withTimeout(reader.read(), timeoutMs, "direct first-byte timeout");
+    if (!result.done && result.value?.byteLength) return { reader, firstChunk: result.value };
+    logger.debug("direct_connection_closed_without_data");
   } catch (error) {
-    logger.debug("direct_socket_read_failed", { error: errorMessage(error) });
-  } finally {
-    reader.releaseLock();
-    closeSocket(socket);
+    logger.debug("direct_first_byte_failed", { error: errorMessage(error) });
+    try {
+      await reader.cancel(error);
+    } catch {
+      // Closing the socket below is sufficient if stream cancellation fails.
+    }
   }
-  return { receivedData, headerSent };
+  reader.releaseLock();
+  closeSocket(socket);
+  return null;
 }
 
 async function pumpReader(reader: ReadableStreamDefaultReader<Uint8Array>, socket: TcpSocket, webSocket: WebSocket, logger: Logger): Promise<void> {
@@ -361,18 +372,24 @@ async function forwardDnsPackets(data: Uint8Array, webSocket: WebSocket, respons
   }
 }
 
-function websocketReadable(webSocket: WebSocket, earlyDataHeader: string | null): ReadableStream<ArrayBuffer | Uint8Array> {
-  let cancelled = false;
+function websocketReadable(webSocket: WebSocket, earlyDataHeader: string | null): ReadableStream<unknown> {
+  let settled = false;
   return new ReadableStream({
     start(controller) {
       webSocket.addEventListener("message", (event) => {
-        if (!cancelled) controller.enqueue(event.data as ArrayBuffer);
+        if (!settled) controller.enqueue(event.data);
       });
       webSocket.addEventListener("close", () => {
-        if (!cancelled) controller.close();
+        if (!settled) {
+          settled = true;
+          controller.close();
+        }
       });
       webSocket.addEventListener("error", () => {
-        if (!cancelled) controller.error(new Error("websocket error"));
+        if (!settled) {
+          settled = true;
+          controller.error(new Error("websocket error"));
+        }
       });
       if (earlyDataHeader) {
         const earlyData = decodeBase64Url(earlyDataHeader);
@@ -380,7 +397,7 @@ function websocketReadable(webSocket: WebSocket, earlyDataHeader: string | null)
       }
     },
     cancel() {
-      cancelled = true;
+      settled = true;
       safeCloseWebSocket(webSocket);
     },
   });
@@ -406,8 +423,12 @@ function sendWebSocket(webSocket: WebSocket, payload: Uint8Array, header: Uint8A
   webSocket.send(combined);
 }
 
-function toUint8Array(value: ArrayBuffer | Uint8Array): Uint8Array {
-  return value instanceof Uint8Array ? value : new Uint8Array(value);
+export async function toUint8Array(value: unknown): Promise<Uint8Array> {
+  if (value instanceof Uint8Array) return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (value instanceof Blob) return new Uint8Array(await value.arrayBuffer());
+  throw new Error("unsupported WebSocket message type");
 }
 
 function constantTimeEqual(provided: Uint8Array, expected: Uint8Array): boolean {
@@ -445,6 +466,14 @@ function safeCloseWebSocket(webSocket: WebSocket): void {
   } catch {
     // The peer may already have closed between the readyState check and close().
   }
+}
+
+function looksLikeTlsClientHello(data: Uint8Array): boolean {
+  return data.byteLength >= 3 && data[0] === 0x16 && data[1] === 0x03;
+}
+
+function looksLikeTlsServerRecord(data: Uint8Array): boolean {
+  return data.byteLength >= 3 && data[0] >= 0x14 && data[0] <= 0x17 && data[1] === 0x03;
 }
 
 function endpointLabel(endpoint: ProxyEndpoint): string {
