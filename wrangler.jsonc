@@ -23,6 +23,12 @@
     "staging": {
       "workers_dev": true,
       "preview_urls": true,
+      "routes": [
+        {
+          "pattern": "btkakashi.cc.cd",
+          "custom_domain": true
+        }
+      ],
       "triggers": {
         "crons": ["17 */6 * * *"]
       },
