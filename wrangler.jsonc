@@ -18,5 +18,19 @@
     "FIRST_BYTE_TIMEOUT_MS": "3000",
     "ALLOW_PATH_PROXYIP": "false",
     "DEBUG": "false"
+  },
+  "env": {
+    "staging": {
+      "workers_dev": true,
+      "preview_urls": true,
+      "vars": {
+        "proxyip": "proxyip.hk.fxxk.dedyn.io,proxyip.jp.fxxk.dedyn.io",
+        "PROXY_CONCURRENT_DIAL": "2",
+        "CONNECT_TIMEOUT_MS": "1800",
+        "FIRST_BYTE_TIMEOUT_MS": "3000",
+        "ALLOW_PATH_PROXYIP": "false",
+        "DEBUG": "false"
+      }
+    }
   }
 }
